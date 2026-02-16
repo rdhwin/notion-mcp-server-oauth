@@ -12,6 +12,7 @@ import {
   getPageBlocks,
   updateDatabase,
   createDatabase,
+  archiveDatabase,
   createPage,
   updatePage,
   batchUpdatePages,
@@ -292,6 +293,12 @@ Returns an array of results, one per update, each with: page_id, status ("succes
 
 Returns the new database's data_source id (use this as the database_id for other tools), the container database id, title, and url.
 
+## Return value IDs
+
+The response contains two IDs:
+- "id" — the data_source ID. Use this as the database_id for query-database, get-database-schema, update-database, create-database-item, and delete-database.
+- "databaseId" — the raw Notion container database ID. You generally don't need this.
+
 ## Properties
 
 Define columns using the same format as update-database. A "Name" title column is created automatically.
@@ -318,6 +325,18 @@ Available property types: title, rich_text, number, select, multi_select, status
         title,
         properties,
       });
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    });
+
+    this.server.registerTool("delete-database", {
+      description: `Archive (soft-delete) a Notion database. The database is moved to Notion's trash and can be restored from the Notion UI.
+
+Use the "id" (data_source ID) returned by create-database or list-databases. This is not reversible via the API — only through Notion's trash UI.`,
+      inputSchema: {
+        database_id: z.string().describe("Database ID (data_source ID from list-databases or create-database)"),
+      },
+    }, async ({ database_id }) => {
+      const result = await archiveDatabase(token, normalizeId(database_id));
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     });
 
