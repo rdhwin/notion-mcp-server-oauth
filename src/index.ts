@@ -11,8 +11,10 @@ import {
   getPage,
   getPageBlocks,
   updateDatabase,
+  createDatabase,
   createPage,
   updatePage,
+  batchUpdatePages,
   archivePage,
   normalizeId,
 } from "./notion";
@@ -251,6 +253,71 @@ Use this to remove items from a database or delete standalone pages. This is not
       },
     }, async ({ page_id }) => {
       const result = await archivePage(token, normalizeId(page_id));
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    });
+
+    this.server.registerTool("batch-update-pages", {
+      description: `Update multiple Notion pages' properties in a single call. All updates run concurrently for speed.
+
+Use this instead of calling update-page-properties multiple times — e.g. after a quiz session, mark 10 questions as "Done" or "In Progress" in one shot.
+
+PREREQUISITE: Call get-database-schema to know the exact property names and types.
+
+Property value format is the same as update-page-properties / create-database-item.
+
+Returns an array of results, one per update, each with: page_id, status ("success" or "error"), and either the updated page or an error message.`,
+      inputSchema: {
+        updates: z
+          .array(
+            z.object({
+              page_id: z.string().describe("Page ID or Notion URL of the page to update"),
+              properties: z
+                .record(z.string(), z.any())
+                .describe("Property values to update (same format as update-page-properties)"),
+            }),
+          )
+          .describe("Array of updates. Each entry has a page_id and the properties to set."),
+      },
+    }, async ({ updates }) => {
+      const normalized = updates.map((u) => ({
+        page_id: normalizeId(u.page_id),
+        properties: u.properties,
+      }));
+      const results = await batchUpdatePages(token, normalized);
+      return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+    });
+
+    this.server.registerTool("create-database", {
+      description: `Create a new Notion database as a child of an existing page.
+
+Returns the new database's data_source id (use this as the database_id for other tools), the container database id, title, and url.
+
+## Properties
+
+Define columns using the same format as update-database. A "Name" title column is created automatically.
+
+Examples:
+  { "Status": { "select": { "options": [{ "name": "Not Started" }, { "name": "In Progress" }, { "name": "Done" }] } } }
+  { "Priority": { "number": { "format": "number" } } }
+  { "Tags": { "multi_select": { "options": [{ "name": "Easy" }, { "name": "Medium" }, { "name": "Hard" }] } } }
+  { "Due Date": { "date": {} } }
+  { "Notes": { "rich_text": {} } }
+
+Available property types: title, rich_text, number, select, multi_select, status, date, checkbox, url, email, phone_number, people, relation, files.`,
+      inputSchema: {
+        parent_page_id: z.string().describe("Parent page ID or Notion URL — the database will be created under this page"),
+        title: z.string().describe("Title of the new database"),
+        properties: z
+          .record(z.string(), z.any())
+          .optional()
+          .describe("Column definitions. Key = column name, value = type config. A title column is created automatically."),
+      },
+    }, async ({ parent_page_id, title, properties }) => {
+      const result = await createDatabase(token, {
+        parentPageId: normalizeId(parent_page_id),
+        title,
+        properties,
+      });
       return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     });
 

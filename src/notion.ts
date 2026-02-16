@@ -245,6 +245,22 @@ export async function updatePage(token: string, pageId: string, properties: Reco
   return flattenPage(page);
 }
 
+// ── Batch update multiple pages' properties concurrently ──
+export async function batchUpdatePages(
+  token: string,
+  updates: Array<{ page_id: string; properties: Record<string, any> }>,
+) {
+  const results = await Promise.allSettled(
+    updates.map(({ page_id, properties }) => updatePage(token, page_id, properties)),
+  );
+
+  return results.map((r, i) => ({
+    page_id: updates[i].page_id,
+    status: r.status === "fulfilled" ? "success" : "error",
+    ...(r.status === "fulfilled" ? { page: r.value } : { error: (r.reason as Error).message }),
+  }));
+}
+
 // ── Archive (delete) a page ──
 export async function archivePage(token: string, pageId: string) {
   const page = await notionFetch(token, `/pages/${pageId}`, {
