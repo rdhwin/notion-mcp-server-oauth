@@ -100,10 +100,18 @@ export async function queryDatabase(
     if (sorts) body.sorts = sorts;
     if (cursor) body.start_cursor = cursor;
 
-    const res = await notionFetch(token, `/data_sources/${databaseId}/query`, {
-      method: "POST",
-      body: JSON.stringify(body),
-    });
+    let res: any;
+    try {
+      res = await notionFetch(token, `/data_sources/${databaseId}/query`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    } catch {
+      res = await notionFetch(token, `/databases/${databaseId}/query`, {
+        method: "POST",
+        body: JSON.stringify(body),
+      });
+    }
 
     for (const page of res.results) {
       allPages.push(flattenPage(page));
@@ -122,27 +130,34 @@ export async function getPage(token: string, pageId: string) {
 }
 
 // ── Create a new database under a parent page ──
+// In API v2025-09-03, POST /databases creates a container;
+// properties live on the nested data_source, so we patch them after creation.
 export async function createDatabase(token: string, opts: {
   parentPageId: string;
   title: string;
-  properties: Record<string, any>;
+  properties?: Record<string, any>;
 }) {
-  const body: any = {
-    parent: { page_id: opts.parentPageId },
-    title: [{ type: "text", text: { content: opts.title } }],
-    properties: {
-      Name: { title: {} },
-      ...opts.properties,
-    },
-  };
-
-  const db = await notionFetch(token, "/data_sources", {
+  const db = await notionFetch(token, "/databases", {
     method: "POST",
-    body: JSON.stringify(body),
+    body: JSON.stringify({
+      parent: { type: "page_id", page_id: opts.parentPageId },
+      title: [{ type: "text", text: { content: opts.title } }],
+    }),
   });
 
+  const dsId: string | undefined = db.data_sources?.[0]?.id;
+  if (!dsId) throw new Error("Database created but no data_source returned");
+
+  if (opts.properties && Object.keys(opts.properties).length > 0) {
+    await notionFetch(token, `/data_sources/${dsId}`, {
+      method: "PATCH",
+      body: JSON.stringify({ properties: opts.properties }),
+    });
+  }
+
   return {
-    id: db.id,
+    id: dsId,
+    databaseId: db.id,
     title: db.title?.[0]?.plain_text ?? "(untitled)",
     url: db.url,
   };
@@ -150,11 +165,14 @@ export async function createDatabase(token: string, opts: {
 
 // ── Archive (delete) a database ──
 export async function archiveDatabase(token: string, databaseId: string) {
-  const db = await notionFetch(token, `/data_sources/${databaseId}`, {
-    method: "PATCH",
-    body: JSON.stringify({ archived: true }),
-  });
-  return { id: db.id, archived: true };
+  const body = JSON.stringify({ archived: true });
+  try {
+    const db = await notionFetch(token, `/data_sources/${databaseId}`, { method: "PATCH", body });
+    return { id: db.id, archived: true };
+  } catch {
+    const db = await notionFetch(token, `/databases/${databaseId}`, { method: "PATCH", body });
+    return { id: db.id, archived: true };
+  }
 }
 
 // ── Update database properties (add/rename/remove columns) ──
@@ -170,10 +188,18 @@ export async function updateDatabase(token: string, databaseId: string, updates:
     body.properties = updates.properties;
   }
 
-  const db = await notionFetch(token, `/data_sources/${databaseId}`, {
-    method: "PATCH",
-    body: JSON.stringify(body),
-  });
+  let db: any;
+  try {
+    db = await notionFetch(token, `/data_sources/${databaseId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  } catch {
+    db = await notionFetch(token, `/databases/${databaseId}`, {
+      method: "PATCH",
+      body: JSON.stringify(body),
+    });
+  }
 
   return {
     id: db.id,
@@ -185,14 +211,16 @@ export async function updateDatabase(token: string, databaseId: string, updates:
 
 // ── Create a page (in a database or as a standalone page) ──
 export async function createPage(token: string, opts: {
-  parent: { database_id?: string; page_id?: string };
+  parent: { data_source_id?: string; database_id?: string; page_id?: string };
   properties?: Record<string, any>;
   children?: any[];
 }) {
   const body: any = {};
 
-  if (opts.parent.database_id) {
-    body.parent = { data_source_id: opts.parent.database_id };
+  if (opts.parent.data_source_id) {
+    body.parent = { type: "data_source_id", data_source_id: opts.parent.data_source_id };
+  } else if (opts.parent.database_id) {
+    body.parent = { type: "database_id", database_id: opts.parent.database_id };
   } else if (opts.parent.page_id) {
     body.parent = { page_id: opts.parent.page_id };
   }

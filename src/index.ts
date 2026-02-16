@@ -168,7 +168,7 @@ Property value formats by type:
       },
     }, async ({ database_id, properties }) => {
       const page = await createPage(token, {
-        parent: { database_id: normalizeId(database_id) },
+        parent: { data_source_id: normalizeId(database_id) },
         properties,
       });
       return { content: [{ type: "text", text: JSON.stringify(page, null, 2) }] };

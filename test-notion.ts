@@ -106,7 +106,7 @@ async function main() {
   let createdPageId: string | undefined;
   await test("createPage (database item)", async () => {
     const page = await createPage(TOKEN, {
-      parent: { database_id: dbId },
+      parent: { data_source_id: dbId },
       properties: {
         [titlePropName]: {
           title: [{ text: { content: "MCP Test Item — safe to delete" } }],
