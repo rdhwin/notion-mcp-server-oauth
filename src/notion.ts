@@ -21,8 +21,8 @@ async function notionFetch(token: string, path: string, init?: RequestInit): Pro
   return res.json();
 }
 
-// ── List all databases the integration has access to ──
-export async function listDatabases(token: string) {
+// ── Fetch all data sources via search (shared helper) ──
+async function searchAllDataSources(token: string) {
   const results: any[] = [];
   let cursor: string | undefined;
 
@@ -35,6 +35,13 @@ export async function listDatabases(token: string) {
     cursor = res.has_more ? (res.next_cursor ?? undefined) : undefined;
   } while (cursor);
 
+  return results;
+}
+
+// ── List all databases the integration has access to ──
+export async function listDatabases(token: string) {
+  const results = await searchAllDataSources(token);
+
   return results.map((db: any) => ({
     id: db.id,
     title: db.title?.[0]?.plain_text ?? "(untitled)",
@@ -45,9 +52,16 @@ export async function listDatabases(token: string) {
 }
 
 // ── Get database schema (properties / columns) ──
-export async function getDatabaseSchema(token: string, dataSourceId: string) {
-  const ds = await notionFetch(token, `/data_sources/${dataSourceId}`);
-  const properties = Object.entries(ds.properties ?? {}).map(
+export async function getDatabaseSchema(token: string, databaseId: string) {
+  const normalized = databaseId.replace(/-/g, "");
+  const all = await searchAllDataSources(token);
+  const db = all.find((d: any) => d.id.replace(/-/g, "") === normalized);
+
+  if (!db) {
+    throw new Error(`Database ${databaseId} not found. Make sure it's shared with the integration.`);
+  }
+
+  const properties = Object.entries(db.properties ?? {}).map(
     ([name, prop]: [string, any]) => ({
       name,
       type: prop.type,
@@ -63,8 +77,8 @@ export async function getDatabaseSchema(token: string, dataSourceId: string) {
   );
 
   return {
-    id: ds.id,
-    title: ds.title?.[0]?.plain_text ?? "(untitled)",
+    id: db.id,
+    title: db.title?.[0]?.plain_text ?? "(untitled)",
     properties,
   };
 }
@@ -72,7 +86,7 @@ export async function getDatabaseSchema(token: string, dataSourceId: string) {
 // ── Query a database with optional filter + sort ──
 export async function queryDatabase(
   token: string,
-  dataSourceId: string,
+  databaseId: string,
   filter?: any,
   sorts?: any[],
   pageSize?: number,
@@ -86,7 +100,7 @@ export async function queryDatabase(
     if (sorts) body.sorts = sorts;
     if (cursor) body.start_cursor = cursor;
 
-    const res = await notionFetch(token, `/data_sources/${dataSourceId}/query`, {
+    const res = await notionFetch(token, `/data_sources/${databaseId}/query`, {
       method: "POST",
       body: JSON.stringify(body),
     });
@@ -105,6 +119,111 @@ export async function queryDatabase(
 export async function getPage(token: string, pageId: string) {
   const page = await notionFetch(token, `/pages/${pageId}`);
   return flattenPage(page);
+}
+
+// ── Create a new database under a parent page ──
+export async function createDatabase(token: string, opts: {
+  parentPageId: string;
+  title: string;
+  properties: Record<string, any>;
+}) {
+  const body: any = {
+    parent: { page_id: opts.parentPageId },
+    title: [{ type: "text", text: { content: opts.title } }],
+    properties: {
+      Name: { title: {} },
+      ...opts.properties,
+    },
+  };
+
+  const db = await notionFetch(token, "/data_sources", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+  return {
+    id: db.id,
+    title: db.title?.[0]?.plain_text ?? "(untitled)",
+    url: db.url,
+  };
+}
+
+// ── Archive (delete) a database ──
+export async function archiveDatabase(token: string, databaseId: string) {
+  const db = await notionFetch(token, `/data_sources/${databaseId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ archived: true }),
+  });
+  return { id: db.id, archived: true };
+}
+
+// ── Update database properties (add/rename/remove columns) ──
+export async function updateDatabase(token: string, databaseId: string, updates: {
+  title?: string;
+  properties?: Record<string, any>;
+}) {
+  const body: any = {};
+  if (updates.title !== undefined) {
+    body.title = [{ type: "text", text: { content: updates.title } }];
+  }
+  if (updates.properties) {
+    body.properties = updates.properties;
+  }
+
+  const db = await notionFetch(token, `/data_sources/${databaseId}`, {
+    method: "PATCH",
+    body: JSON.stringify(body),
+  });
+
+  return {
+    id: db.id,
+    title: db.title?.[0]?.plain_text ?? "(untitled)",
+    url: db.url,
+    last_edited_time: db.last_edited_time,
+  };
+}
+
+// ── Create a page (in a database or as a standalone page) ──
+export async function createPage(token: string, opts: {
+  parent: { database_id?: string; page_id?: string };
+  properties?: Record<string, any>;
+  children?: any[];
+}) {
+  const body: any = {};
+
+  if (opts.parent.database_id) {
+    body.parent = { data_source_id: opts.parent.database_id };
+  } else if (opts.parent.page_id) {
+    body.parent = { page_id: opts.parent.page_id };
+  }
+
+  if (opts.properties) body.properties = opts.properties;
+  if (opts.children) body.children = opts.children;
+
+  const page = await notionFetch(token, "/pages", {
+    method: "POST",
+    body: JSON.stringify(body),
+  });
+
+  return flattenPage(page);
+}
+
+// ── Update a page's properties ──
+export async function updatePage(token: string, pageId: string, properties: Record<string, any>) {
+  const page = await notionFetch(token, `/pages/${pageId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ properties }),
+  });
+  return flattenPage(page);
+}
+
+// ── Archive (delete) a page ──
+export async function archivePage(token: string, pageId: string) {
+  const page = await notionFetch(token, `/pages/${pageId}`, {
+    method: "PATCH",
+    body: JSON.stringify({ archived: true }),
+  });
+  return { id: page.id, archived: true };
 }
 
 // ── Get page content (blocks) ──
