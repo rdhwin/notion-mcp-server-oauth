@@ -1,0 +1,26 @@
+{
+	"name": "remote-mcp-server-authless",
+	"version": "0.0.0",
+	"private": true,
+	"scripts": {
+		"deploy": "wrangler deploy",
+		"dev": "wrangler dev",
+		"format": "oxfmt --write .",
+		"lint:fix": "oxlint --fix",
+		"start": "wrangler dev",
+		"cf-typegen": "wrangler types",
+		"type-check": "tsc --noEmit"
+	},
+	"dependencies": {
+		"@cloudflare/workers-oauth-provider": "^0.2.3",
+		"agents": "^0.4.1",
+		"hono": "^4.11.9",
+		"zod": "^4.3.6"
+	},
+	"devDependencies": {
+		"oxfmt": "^0.32.0",
+		"oxlint": "^1.47.0",
+		"typescript": "5.9.3",
+		"wrangler": "^4.65.0"
+	}
+}
