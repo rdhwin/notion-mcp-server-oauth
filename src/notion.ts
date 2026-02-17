@@ -90,9 +90,11 @@ export async function queryDatabase(
   filter?: any,
   sorts?: any[],
   pageSize?: number,
+  startCursor?: string,
 ) {
   const allPages: any[] = [];
-  let cursor: string | undefined;
+  let cursor: string | undefined = startCursor;
+  const manualPagination = pageSize !== undefined;
 
   do {
     const body: any = { page_size: pageSize ?? 100 };
@@ -117,10 +119,18 @@ export async function queryDatabase(
       allPages.push(flattenPage(page));
     }
 
+    if (manualPagination) {
+      return {
+        results: allPages,
+        has_more: res.has_more ?? false,
+        next_cursor: res.next_cursor ?? null,
+      };
+    }
+
     cursor = res.has_more ? (res.next_cursor ?? undefined) : undefined;
   } while (cursor);
 
-  return allPages;
+  return { results: allPages, has_more: false, next_cursor: null };
 }
 
 // ── Get a single page's properties ──
@@ -268,6 +278,30 @@ export async function archivePage(token: string, pageId: string) {
     body: JSON.stringify({ archived: true }),
   });
   return { id: page.id, archived: true };
+}
+
+// ── Append blocks to a page or block ──
+export async function appendBlockChildren(token: string, blockId: string, children: any[]) {
+  const res = await notionFetch(token, `/blocks/${blockId}/children`, {
+    method: "PATCH",
+    body: JSON.stringify({ children }),
+  });
+  return res.results.map(flattenBlock);
+}
+
+// ── Update a single block ──
+export async function updateBlock(token: string, blockId: string, block: Record<string, any>) {
+  const res = await notionFetch(token, `/blocks/${blockId}`, {
+    method: "PATCH",
+    body: JSON.stringify(block),
+  });
+  return flattenBlock(res);
+}
+
+// ── Delete (archive) a block ──
+export async function deleteBlock(token: string, blockId: string) {
+  await notionFetch(token, `/blocks/${blockId}`, { method: "DELETE" });
+  return { id: blockId, deleted: true };
 }
 
 // ── Get page content (blocks) ──

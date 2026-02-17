@@ -10,6 +10,9 @@ import {
   queryDatabase,
   getPage,
   getPageBlocks,
+  appendBlockChildren,
+  updateBlock,
+  deleteBlock,
   updateDatabase,
   createDatabase,
   archiveDatabase,
@@ -108,12 +111,16 @@ Array of sort objects:
         page_size: z
           .number()
           .optional()
-          .describe("Max items per internal page (1-100, default 100). All pages are fetched automatically — this controls batch size, not total results."),
+          .describe("Max items to return (1-100). When provided, returns a single page of results with has_more and next_cursor for manual pagination. When omitted, auto-fetches all results."),
+        start_cursor: z
+          .string()
+          .optional()
+          .describe("Cursor from a previous query's next_cursor to fetch the next page of results."),
       },
-    }, async ({ database_id, filter, sorts, page_size }) => {
-      const pages = await queryDatabase(token, normalizeId(database_id), filter, sorts, page_size);
+    }, async ({ database_id, filter, sorts, page_size, start_cursor }) => {
+      const result = await queryDatabase(token, normalizeId(database_id), filter, sorts, page_size, start_cursor);
       return {
-        content: [{ type: "text", text: JSON.stringify({ count: pages.length, results: pages }, null, 2) }],
+        content: [{ type: "text", text: JSON.stringify({ count: result.results.length, has_more: result.has_more, next_cursor: result.next_cursor, results: result.results }, null, 2) }],
       };
     });
 
@@ -139,6 +146,96 @@ Note: This returns the page body only, NOT its properties. To read properties (t
     }, async ({ page_id }) => {
       const blocks = await getPageBlocks(token, normalizeId(page_id));
       return { content: [{ type: "text", text: JSON.stringify(blocks, null, 2) }] };
+    });
+
+    this.server.registerTool("add-page-content", {
+      description: `Append content blocks to an existing Notion page or block. Blocks are added to the end of the page body.
+
+Use get-page-content first to see existing blocks, then use this to add more.
+
+## Block syntax
+
+Each block is an object with "object": "block", a "type", and the type-specific content:
+
+Paragraph:
+  { "object": "block", "type": "paragraph", "paragraph": { "rich_text": [{ "type": "text", "text": { "content": "Hello world" } }] } }
+
+Headings:
+  { "object": "block", "type": "heading_1", "heading_1": { "rich_text": [{ "type": "text", "text": { "content": "Main heading" } }] } }
+  { "object": "block", "type": "heading_2", "heading_2": { "rich_text": [{ "type": "text", "text": { "content": "Subheading" } }] } }
+  { "object": "block", "type": "heading_3", "heading_3": { "rich_text": [{ "type": "text", "text": { "content": "Sub-subheading" } }] } }
+
+Lists:
+  { "object": "block", "type": "bulleted_list_item", "bulleted_list_item": { "rich_text": [{ "type": "text", "text": { "content": "Bullet point" } }] } }
+  { "object": "block", "type": "numbered_list_item", "numbered_list_item": { "rich_text": [{ "type": "text", "text": { "content": "Step 1" } }] } }
+
+To-do:
+  { "object": "block", "type": "to_do", "to_do": { "rich_text": [{ "type": "text", "text": { "content": "Task" } }], "checked": false } }
+
+Code:
+  { "object": "block", "type": "code", "code": { "rich_text": [{ "type": "text", "text": { "content": "console.log('hi')" } }], "language": "javascript" } }
+
+Other:
+  { "object": "block", "type": "divider", "divider": {} }
+  { "object": "block", "type": "quote", "quote": { "rich_text": [{ "type": "text", "text": { "content": "A wise quote" } }] } }
+  { "object": "block", "type": "callout", "callout": { "rich_text": [{ "type": "text", "text": { "content": "Important note" } }], "icon": { "emoji": "💡" } } }
+
+Rich text formatting (applies inside any rich_text array):
+  Bold:          { "type": "text", "text": { "content": "bold" }, "annotations": { "bold": true } }
+  Italic:        { "type": "text", "text": { "content": "italic" }, "annotations": { "italic": true } }
+  Code:          { "type": "text", "text": { "content": "code" }, "annotations": { "code": true } }
+  Link:          { "type": "text", "text": { "content": "click here", "link": { "url": "https://example.com" } } }`,
+      inputSchema: {
+        page_id: z.string().describe("Page or block ID to append content to — from query-database results, get-page, get-page-content, or a Notion URL"),
+        children: z
+          .array(z.record(z.string(), z.any()))
+          .describe("Array of block objects to append. See description for block syntax."),
+      },
+    }, async ({ page_id, children }) => {
+      const blocks = await appendBlockChildren(token, normalizeId(page_id), children);
+      return { content: [{ type: "text", text: JSON.stringify(blocks, null, 2) }] };
+    });
+
+    this.server.registerTool("update-block", {
+      description: `Update an existing block's content on a Notion page. Only the fields you include will be changed.
+
+PREREQUISITE: Call get-page-content first to get the block IDs and current content.
+
+To update a block, provide its type key with the new content. Examples:
+
+Update paragraph text:
+  { "paragraph": { "rich_text": [{ "type": "text", "text": { "content": "Updated text" } }] } }
+
+Update to-do (check/uncheck):
+  { "to_do": { "rich_text": [{ "type": "text", "text": { "content": "Task" } }], "checked": true } }
+
+Update code block:
+  { "code": { "rich_text": [{ "type": "text", "text": { "content": "new code" } }], "language": "python" } }
+
+Returns the updated block with id, type, text, and type-specific fields.`,
+      inputSchema: {
+        block_id: z.string().describe("Block ID from get-page-content results"),
+        block: z
+          .record(z.string(), z.any())
+          .describe("Block update object. Key is the block type (paragraph, to_do, code, etc.) with new content."),
+      },
+    }, async ({ block_id, block }) => {
+      const result = await updateBlock(token, normalizeId(block_id), block);
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
+    });
+
+    this.server.registerTool("delete-block", {
+      description: `Delete (archive) a block from a Notion page. The block is removed from the page and moved to Notion's trash.
+
+PREREQUISITE: Call get-page-content first to get the block ID you want to delete.
+
+This is not reversible via the API — only through Notion's trash UI.`,
+      inputSchema: {
+        block_id: z.string().describe("Block ID from get-page-content results"),
+      },
+    }, async ({ block_id }) => {
+      const result = await deleteBlock(token, normalizeId(block_id));
+      return { content: [{ type: "text", text: JSON.stringify(result, null, 2) }] };
     });
 
     this.server.registerTool("update-database", {
