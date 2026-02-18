@@ -265,7 +265,7 @@ export async function batchUpdatePages(
   );
 
   return results.map((r, i) => ({
-    page_id: updates[i].page_id,
+    page_id: formatId(updates[i].page_id),
     status: r.status === "fulfilled" ? "success" : "error",
     ...(r.status === "fulfilled" ? { page: r.value } : { error: (r.reason as Error).message }),
   }));
@@ -322,7 +322,7 @@ export async function getPageBlocks(token: string, pageId: string) {
 // ── Helpers ──
 
 function flattenPage(page: any) {
-  if (!page.properties) return { id: page.id, properties: {} };
+  if (!page.properties) return { id: formatId(page.id), properties: {} };
 
   const props: Record<string, any> = {};
   for (const [key, val] of Object.entries(page.properties) as any[]) {
@@ -330,7 +330,7 @@ function flattenPage(page: any) {
   }
 
   return {
-    id: page.id,
+    id: formatId(page.id),
     url: page.url,
     created_time: page.created_time,
     last_edited_time: page.last_edited_time,
@@ -413,4 +413,10 @@ export function normalizeId(idOrUrl: string): string {
   const urlMatch = idOrUrl.match(/(?:notion\.so|notion\.site)\/(?:.*[-/])?([a-f0-9]{32})/);
   if (urlMatch) return urlMatch[1];
   return idOrUrl.replace(/-/g, "");
+}
+
+export function formatId(id: string): string {
+  const hex = id.replace(/-/g, "");
+  if (hex.length !== 32) return id;
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
 }

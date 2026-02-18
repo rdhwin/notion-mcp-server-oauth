@@ -21,6 +21,7 @@ import {
   batchUpdatePages,
   archivePage,
   normalizeId,
+  formatId,
 } from "./notion";
 
 export class NotionMCP extends McpAgent<Env, unknown, Props> {
@@ -330,6 +331,8 @@ Property value format is the same as create-database-item:
 
 To clear a property, set it to its empty value (e.g. { "rich_text": [] }, { "select": null }).
 
+To remove a single tag from a multi_select, re-send the array with that tag omitted. For example, to remove "Patterns" while keeping "Scaling Reads": { "multi_select": [{ "name": "Scaling Reads" }] }
+
 Returns the updated page with its id, url, and flattened properties.`,
       inputSchema: {
         page_id: z.string().describe("Page ID from query-database results, get-page, or a Notion URL"),
@@ -361,9 +364,11 @@ Use this instead of calling update-page-properties multiple times — e.g. after
 
 PREREQUISITE: Call get-database-schema to know the exact property names and types.
 
-Property value format is the same as update-page-properties / create-database-item.
+Property value format is the same as update-page-properties / create-database-item. To remove a single tag from a multi_select, re-send the array with that tag omitted.
 
-Returns an array of results, one per update, each with: page_id, status ("success" or "error"), and either the updated page or an error message.`,
+Limit: max 50 updates per call (Cloudflare Workers subrequest ceiling). For larger batches, split into multiple calls — each call gets its own budget.
+
+Returns { summary, results } where summary has total, succeeded, failed, and failed_ids, and each result has: page_id, status ("success" or "error"), and either the updated page or an error message.`,
       inputSchema: {
         updates: z
           .array(
@@ -374,15 +379,43 @@ Returns an array of results, one per update, each with: page_id, status ("succes
                 .describe("Property values to update (same format as update-page-properties)"),
             }),
           )
-          .describe("Array of updates. Each entry has a page_id and the properties to set."),
+          .max(50)
+          .describe("Array of updates (max 50 per call — split larger batches across multiple calls). Each entry has a page_id and the properties to set."),
+        dry_run: z
+          .boolean()
+          .optional()
+          .default(false)
+          .describe("If true, validates the payload and returns the list of page IDs that would be updated, without making any changes."),
       },
-    }, async ({ updates }) => {
+    }, async ({ updates, dry_run }) => {
       const normalized = updates.map((u) => ({
         page_id: normalizeId(u.page_id),
         properties: u.properties,
       }));
+
+      if (dry_run) {
+        return {
+          content: [{
+            type: "text",
+            text: JSON.stringify({
+              dry_run: true,
+              total: normalized.length,
+              page_ids: normalized.map((u) => formatId(u.page_id)),
+            }, null, 2),
+          }],
+        };
+      }
+
       const results = await batchUpdatePages(token, normalized);
-      return { content: [{ type: "text", text: JSON.stringify(results, null, 2) }] };
+      const succeeded = results.filter((r) => r.status === "success").length;
+      const failed = results.filter((r) => r.status === "error").length;
+      const failedIds = results.filter((r) => r.status === "error").map((r) => r.page_id);
+
+      const response = {
+        summary: { total: results.length, succeeded, failed, failed_ids: failedIds },
+        results,
+      };
+      return { content: [{ type: "text", text: JSON.stringify(response, null, 2) }] };
     });
 
     this.server.registerTool("create-database", {
